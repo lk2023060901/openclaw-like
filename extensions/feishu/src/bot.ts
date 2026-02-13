@@ -154,6 +154,31 @@ async function resolveFeishuSenderName(params: {
   }
 }
 
+/**
+ * Try to extract sender name from mentions array in the message event.
+ * This is a fallback when API permission is not available.
+ */
+function extractSenderNameFromMentions(
+  event: FeishuMessageEvent,
+  senderOpenId: string,
+): string | undefined {
+  const mentions = event.message.mentions ?? [];
+  for (const mention of mentions) {
+    if (mention.id.open_id === senderOpenId && mention.name) {
+      return mention.name;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Cache a sender name from any source (API, mentions, etc.)
+ */
+function cacheSenderName(senderOpenId: string, name: string): void {
+  const now = Date.now();
+  senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
+}
+
 export type FeishuMessageEvent = {
   sender: {
     sender_id: {
@@ -547,12 +572,26 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
 
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
+  // Strategy: 1) API lookup, 2) Extract from mentions, 3) Fallback to shortened ID
   const senderResult = await resolveFeishuSenderName({
     account,
     senderOpenId: ctx.senderOpenId,
     log,
   });
-  if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
+  let senderName = senderResult.name;
+
+  // If API failed, try to extract name from mentions (when user @mentioned someone before)
+  if (!senderName) {
+    const mentionName = extractSenderNameFromMentions(event, ctx.senderOpenId);
+    if (mentionName) {
+      senderName = mentionName;
+      cacheSenderName(ctx.senderOpenId, mentionName);
+      log(`feishu: extracted sender name from mentions: ${mentionName}`);
+    }
+  }
+
+  // Apply sender name to context
+  if (senderName) ctx = { ...ctx, senderName };
 
   // Track permission error to inform agent later (with cooldown to avoid repetition)
   let permissionErrorForAgent: PermissionError | undefined;
@@ -567,8 +606,12 @@ export async function handleFeishuMessage(params: {
     }
   }
 
+  // Build a friendly display label for logging and messages
+  // Format: "Name" or "Name (ou_xxx)" or "ou_xxx"
+  const senderLabel = senderName ? `${senderName} (${ctx.senderOpenId})` : ctx.senderOpenId;
+
   log(
-    `feishu[${account.accountId}]: received message from ${ctx.senderOpenId} in ${ctx.chatId} (${ctx.chatType})`,
+    `feishu[${account.accountId}]: received message from ${senderLabel} in ${ctx.chatId} (${ctx.chatType})`,
   );
 
   // Log mention targets if detected
@@ -756,6 +799,7 @@ export async function handleFeishuMessage(params: {
           cfg,
           runtime,
           senderOpenId: ctx.senderOpenId,
+          senderName: ctx.senderName,
           dynamicCfg,
           log: (msg) => log(msg),
         });
@@ -877,8 +921,13 @@ export async function handleFeishuMessage(params: {
     }
 
     // Include a readable speaker label so the model can attribute instructions.
-    // (DMs already have per-sender sessions, but the prefix is still useful for clarity.)
-    const speaker = ctx.senderName ?? ctx.senderOpenId;
+    // Format: "Name" or "Name (ou_xxx)" or "ou_xxx"
+    // In group chats, always show the ID for clarity; in DMs, name is sufficient.
+    const speaker = ctx.senderName
+      ? isGroup
+        ? `${ctx.senderName} (${ctx.senderOpenId.slice(0, 12)}...)`
+        : ctx.senderName
+      : ctx.senderOpenId;
     messageBody = `${speaker}: ${messageBody}`;
 
     // If there are mention targets, inform the agent that replies will auto-mention them

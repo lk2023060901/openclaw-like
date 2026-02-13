@@ -11,6 +11,31 @@ export type MaybeCreateDynamicAgentResult = {
 };
 
 /**
+ * Sanitize a string for use in file paths and agent IDs.
+ * Removes or replaces characters that are not filesystem-safe.
+ */
+function sanitizeForPath(str: string): string {
+  return str
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/\.+/g, ".")
+    .slice(0, 50);
+}
+
+/**
+ * Generate a friendly agent ID from user name and open ID.
+ * Format: feishu-{userName}-{shortId} or feishu-{openId}
+ */
+function generateFriendlyAgentId(senderOpenId: string, senderName?: string): string {
+  if (senderName) {
+    const sanitized = sanitizeForPath(senderName);
+    const shortId = senderOpenId.replace(/^(ou_|on_)/, "").slice(0, 8);
+    return `feishu-${sanitized}-${shortId}`;
+  }
+  return `feishu-${senderOpenId}`;
+}
+
+/**
  * Check if a dynamic agent should be created for a DM user and create it if needed.
  * This creates a unique agent instance with its own workspace for each DM user.
  */
@@ -18,10 +43,11 @@ export async function maybeCreateDynamicAgent(params: {
   cfg: OpenClawConfig;
   runtime: PluginRuntime;
   senderOpenId: string;
+  senderName?: string;
   dynamicCfg: DynamicAgentCreationConfig;
   log: (msg: string) => void;
 }): Promise<MaybeCreateDynamicAgentResult> {
-  const { cfg, runtime, senderOpenId, dynamicCfg, log } = params;
+  const { cfg, runtime, senderOpenId, senderName, dynamicCfg, log } = params;
 
   // Check if there's already a binding for this user
   const existingBindings = cfg.bindings ?? [];
@@ -49,8 +75,8 @@ export async function maybeCreateDynamicAgent(params: {
     }
   }
 
-  // Use full OpenID as agent ID suffix (OpenID format: ou_xxx is already filesystem-safe)
-  const agentId = `feishu-${senderOpenId}`;
+  // Generate friendly agent ID with user name if available
+  const agentId = generateFriendlyAgentId(senderOpenId, senderName);
 
   // Check if agent already exists (but binding was missing)
   const existingAgent = (cfg.agents?.list ?? []).find((a) => a.id === agentId);
