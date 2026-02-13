@@ -1,12 +1,16 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
+// Maximum number of cached clients
+const CLIENT_CACHE_MAX_SIZE = 50;
+
 // Multi-account client cache
 const clientCache = new Map<
   string,
   {
     client: Lark.Client;
     config: { appId: string; appSecret: string; domain?: FeishuDomain };
+    lastAccess: number;
   }
 >();
 
@@ -18,6 +22,28 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
     return Lark.Domain.Feishu;
   }
   return domain.replace(/\/+$/, ""); // Custom URL for private deployment
+}
+
+/**
+ * Evict oldest entries when cache exceeds max size.
+ */
+function evictOldestIfNeeded(): void {
+  if (clientCache.size < CLIENT_CACHE_MAX_SIZE) {
+    return;
+  }
+
+  // Find and remove the oldest entry
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+  for (const [key, value] of clientCache) {
+    if (value.lastAccess < oldestTime) {
+      oldestTime = value.lastAccess;
+      oldestKey = key;
+    }
+  }
+  if (oldestKey) {
+    clientCache.delete(oldestKey);
+  }
 }
 
 /**
@@ -50,8 +76,13 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     cached.config.appSecret === appSecret &&
     cached.config.domain === domain
   ) {
+    // Update last access time
+    cached.lastAccess = Date.now();
     return cached.client;
   }
+
+  // Evict oldest if needed
+  evictOldestIfNeeded();
 
   // Create new client
   const client = new Lark.Client({
@@ -65,6 +96,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   clientCache.set(accountId, {
     client,
     config: { appId, appSecret, domain },
+    lastAccess: Date.now(),
   });
 
   return client;
@@ -103,7 +135,12 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
  * Get a cached client for an account (if exists).
  */
 export function getFeishuClient(accountId: string): Lark.Client | null {
-  return clientCache.get(accountId)?.client ?? null;
+  const cached = clientCache.get(accountId);
+  if (cached) {
+    cached.lastAccess = Date.now();
+    return cached.client;
+  }
+  return null;
 }
 
 /**
@@ -115,4 +152,11 @@ export function clearClientCache(accountId?: string): void {
   } else {
     clientCache.clear();
   }
+}
+
+/**
+ * Get current cache size (for monitoring/debugging).
+ */
+export function getClientCacheSize(): number {
+  return clientCache.size;
 }

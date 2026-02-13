@@ -11,17 +11,40 @@ type CardState = { cardId: string; messageId: string; sequence: number; currentT
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
+// Token cache cleanup - run every 5 minutes
+const TOKEN_CACHE_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+let lastTokenCacheCleanup = Date.now();
+
+function cleanupTokenCache(): void {
+  const now = Date.now();
+  if (now - lastTokenCacheCleanup < TOKEN_CACHE_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+  lastTokenCacheCleanup = now;
+  for (const [key, value] of tokenCache) {
+    if (value.expiresAt < now) {
+      tokenCache.delete(key);
+    }
+  }
+}
+
+// Feishu API base URLs
+const FEISHU_API_BASE = "https://open.feishu.cn/open-apis";
+const LARK_API_BASE = "https://open.larksuite.com/open-apis";
+
 function resolveApiBase(domain?: FeishuDomain): string {
   if (domain === "lark") {
-    return "https://open.larksuite.com/open-apis";
+    return LARK_API_BASE;
   }
   if (domain && domain !== "feishu" && domain.startsWith("http")) {
     return `${domain.replace(/\/+$/, "")}/open-apis`;
   }
-  return "https://open.feishu.cn/open-apis";
+  return FEISHU_API_BASE;
 }
 
 async function getToken(creds: Credentials): Promise<string> {
+  cleanupTokenCache();
+
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
   if (cached && cached.expiresAt > Date.now() + 60000) {
@@ -57,6 +80,9 @@ function truncateSummary(text: string, max = 50): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+// Default throttle interval for card updates
+const DEFAULT_UPDATE_THROTTLE_MS = 100;
+
 /** Streaming card session manager */
 export class FeishuStreamingSession {
   private client: Client;
@@ -65,14 +91,25 @@ export class FeishuStreamingSession {
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private log?: (msg: string) => void;
+  private error?: (msg: string) => void;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
-  private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private updateThrottleMs: number;
+  private errorCount = 0;
+  private maxErrors = 5;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    log?: (msg: string) => void,
+    error?: (msg: string) => void,
+    updateThrottleMs?: number,
+  ) {
     this.client = client;
     this.creds = creds;
     this.log = log;
+    this.error = error;
+    this.updateThrottleMs = updateThrottleMs ?? DEFAULT_UPDATE_THROTTLE_MS;
   }
 
   async start(
@@ -132,6 +169,19 @@ export class FeishuStreamingSession {
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
+  private handleError(context: string, err: unknown): void {
+    this.errorCount++;
+    const errorMsg = `StreamingCard ${context}: ${String(err)}`;
+    this.log?.(errorMsg);
+    this.error?.(errorMsg);
+
+    // If too many errors, close the session
+    if (this.errorCount >= this.maxErrors) {
+      this.error?.(`StreamingCard: Too many errors (${this.errorCount}), closing session`);
+      this.closed = true;
+    }
+  }
+
   async update(text: string): Promise<void> {
     if (!this.state || this.closed) {
       return;
@@ -152,18 +202,29 @@ export class FeishuStreamingSession {
       this.state.currentText = text;
       this.state.sequence += 1;
       const apiBase = resolveApiBase(this.creds.domain);
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch((e) => this.log?.(`Update failed: ${String(e)}`));
+      try {
+        const res = await fetch(
+          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${await getToken(this.creds)}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              content: text,
+              sequence: this.state.sequence,
+              uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+            }),
+          },
+        );
+        if (!res.ok) {
+          const errData = (await res.json().catch(() => ({}))) as { msg?: string };
+          throw new Error(`HTTP ${res.status}: ${errData.msg ?? res.statusText}`);
+        }
+      } catch (e) {
+        this.handleError("update", e);
+      }
     });
     await this.queue;
   }
@@ -182,42 +243,64 @@ export class FeishuStreamingSession {
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.currentText) {
       this.state.sequence += 1;
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch(() => {});
-      this.state.currentText = text;
+      try {
+        const res = await fetch(
+          `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${await getToken(this.creds)}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              content: text,
+              sequence: this.state.sequence,
+              uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+            }),
+          },
+        );
+        if (!res.ok) {
+          this.handleError("close update", new Error(`HTTP ${res.status}`));
+        } else {
+          this.state.currentText = text;
+        }
+      } catch (e) {
+        this.handleError("close update", e);
+      }
     }
 
     // Close streaming mode
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({
-        settings: JSON.stringify({
-          config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+    try {
+      const res = await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          settings: JSON.stringify({
+            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+          }),
+          sequence: this.state.sequence,
+          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
         }),
-        sequence: this.state.sequence,
-        uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-      }),
-    }).catch((e) => this.log?.(`Close failed: ${String(e)}`));
+      });
+      if (!res.ok) {
+        this.handleError("close settings", new Error(`HTTP ${res.status}`));
+      }
+    } catch (e) {
+      this.handleError("close settings", e);
+    }
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }
 
   isActive(): boolean {
     return this.state !== null && !this.closed;
+  }
+
+  getErrorCount(): number {
+    return this.errorCount;
   }
 }

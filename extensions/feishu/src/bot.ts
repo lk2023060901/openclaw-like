@@ -23,6 +23,13 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
 
+// --- Constants ---
+// Feishu API permission error code for contact:user:read scope missing
+const FEISHU_PERMISSION_ERROR_CODE = 99991672;
+
+// Default media size limit (30MB)
+const DEFAULT_MEDIA_MAX_MB = 30;
+
 // --- Message deduplication ---
 // Prevent duplicate processing when WebSocket reconnects or Feishu redelivers messages.
 const DEDUP_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -76,8 +83,8 @@ function extractPermissionError(err: unknown): PermissionError | null {
     error?: { permission_violations?: Array<{ uri?: string }> };
   };
 
-  // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) return null;
+  // Feishu permission error code for missing contact:user:read scope
+  if (feishuErr.code !== FEISHU_PERMISSION_ERROR_CODE) return null;
 
   // Extract the grant URL from the error message (contains the direct link)
   const msg = feishuErr.msg ?? "";
@@ -94,7 +101,23 @@ function extractPermissionError(err: unknown): PermissionError | null {
 // --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
 // Cache display names by open_id to avoid an API call on every message.
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
+const SENDER_NAME_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
+let lastSenderNameCleanup = Date.now();
+
+// Cleanup expired sender name cache entries
+function cleanupSenderNameCache(): void {
+  const now = Date.now();
+  if (now - lastSenderNameCleanup < SENDER_NAME_CLEANUP_INTERVAL_MS) {
+    return;
+  }
+  lastSenderNameCleanup = now;
+  for (const [key, value] of senderNameCache) {
+    if (value.expireAt < now) {
+      senderNameCache.delete(key);
+    }
+  }
+}
 
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
@@ -114,6 +137,9 @@ async function resolveFeishuSenderName(params: {
   const { account, senderOpenId, log } = params;
   if (!account.configured) return {};
   if (!senderOpenId) return {};
+
+  // Periodic cleanup of expired cache entries
+  cleanupSenderNameCache();
 
   const cached = senderNameCache.get(senderOpenId);
   const now = Date.now();
@@ -634,7 +660,6 @@ export async function handleFeishuMessage(params: {
   if (isGroup) {
     const groupPolicy = feishuCfg?.groupPolicy ?? "open";
     const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
-    // DEBUG: log(`feishu[${account.accountId}]: groupPolicy=${groupPolicy}`);
 
     // Check if this GROUP is allowed (groupAllowFrom contains group IDs like oc_xxx, not user IDs)
     const groupAllowed = isFeishuGroupAllowed({
@@ -689,7 +714,6 @@ export async function handleFeishuMessage(params: {
       }
       return;
     }
-  } else {
   }
 
   try {
@@ -880,7 +904,7 @@ export async function handleFeishuMessage(params: {
     });
 
     // Resolve media from message
-    const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
+    const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB) * 1024 * 1024;
     const mediaList = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
