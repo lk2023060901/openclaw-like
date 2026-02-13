@@ -3,9 +3,15 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { StickerMetadata } from "../telegram/bot/types.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";
+
+export type StickerMetadata = {
+  id?: string;
+  name?: string;
+  emoji?: string;
+  animated?: boolean;
+};
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;

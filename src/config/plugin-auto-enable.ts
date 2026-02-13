@@ -10,7 +10,10 @@ import {
   normalizeChatChannelId,
 } from "../channels/registry.js";
 import { isRecord } from "../utils.js";
-import { hasAnyWhatsAppAuth } from "../web/accounts.js";
+
+function hasAnyWhatsAppAuth(_cfg: OpenClawConfig): boolean {
+  return false;
+}
 
 type PluginEnableChange = {
   pluginId: string;

@@ -7,10 +7,10 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
-import type { DynamicAgentCreationConfig } from "./types.js";
+import type { DynamicAgentCreationConfig, GroupUserWorkspaceConfig } from "./types.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import { maybeCreateDynamicAgent, maybeCreateGroupUserAgent } from "./dynamic-agent.js";
 import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
 import {
@@ -771,6 +771,56 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: dynamic agent created, new route: ${route.sessionKey}`,
           );
+        }
+      }
+    }
+
+    // Group user workspace isolation
+    // When enabled, creates a unique agent instance with its own workspace for each user in group chats.
+    if (isGroup) {
+      const groupUserWorkspaceCfg = (groupConfig?.groupUserWorkspace ??
+        feishuCfg?.groupUserWorkspace) as GroupUserWorkspaceConfig | undefined;
+      if (groupUserWorkspaceCfg?.enabled) {
+        const runtime = getFeishuRuntime();
+        const mode = groupUserWorkspaceCfg.mode ?? "per-session";
+        const groupUserPeerId =
+          mode === "per-user" ? ctx.senderOpenId : `${ctx.chatId}:${ctx.senderOpenId}`;
+
+        const existingBinding = (cfg.bindings ?? []).some(
+          (b) =>
+            b.match?.channel === "feishu" &&
+            b.match?.peer?.kind === "group" &&
+            b.match?.peer?.id === groupUserPeerId,
+        );
+
+        if (!existingBinding) {
+          const result = await maybeCreateGroupUserAgent({
+            cfg: effectiveCfg,
+            runtime,
+            chatId: ctx.chatId,
+            senderOpenId: ctx.senderOpenId,
+            groupUserWorkspaceCfg,
+            log: (msg) => log(msg),
+          });
+          if (result.created) {
+            effectiveCfg = result.updatedCfg;
+            route = core.channel.routing.resolveAgentRoute({
+              cfg: result.updatedCfg,
+              channel: "feishu",
+              accountId: account.accountId,
+              peer: { kind: "group", id: groupUserPeerId },
+            });
+            log(
+              `feishu[${account.accountId}]: group user agent created, new route: ${route.sessionKey}`,
+            );
+          }
+        } else {
+          route = core.channel.routing.resolveAgentRoute({
+            cfg: effectiveCfg,
+            channel: "feishu",
+            accountId: account.accountId,
+            peer: { kind: "group", id: groupUserPeerId },
+          });
         }
       }
     }

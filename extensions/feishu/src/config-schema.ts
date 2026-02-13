@@ -100,6 +100,25 @@ const FeishuToolsConfigSchema = z
  */
 const TopicSessionModeSchema = z.enum(["disabled", "enabled"]).optional();
 
+/**
+ * Group user workspace isolation configuration.
+ * When enabled, each user in a group chat gets their own workspace,
+ * preventing task interference between different users.
+ *
+ * - "per-user": Each user gets a unique workspace across all groups
+ * - "per-session": Each user gets a unique workspace per group session
+ */
+const GroupUserWorkspaceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    mode: z.enum(["per-user", "per-session"]).optional(),
+    workspaceTemplate: z.string().optional(),
+    agentDirTemplate: z.string().optional(),
+    maxAgents: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -109,6 +128,7 @@ export const FeishuGroupSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topicSessionMode: TopicSessionModeSchema,
+    groupUserWorkspace: GroupUserWorkspaceSchema,
   })
   .strict();
 
@@ -186,6 +206,8 @@ export const FeishuConfigSchema = z
     tools: FeishuToolsConfigSchema,
     // Dynamic agent creation for DM users
     dynamicAgentCreation: DynamicAgentCreationSchema,
+    // Group user workspace isolation
+    groupUserWorkspace: GroupUserWorkspaceSchema,
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })

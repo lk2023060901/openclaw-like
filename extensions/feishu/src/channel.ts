@@ -94,6 +94,16 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         },
         requireMention: { type: "boolean" },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
+        groupUserWorkspace: {
+          type: "object",
+          properties: {
+            enabled: { type: "boolean" },
+            mode: { type: "string", enum: ["per-user", "per-session"] },
+            workspaceTemplate: { type: "string" },
+            agentDirTemplate: { type: "string" },
+            maxAgents: { type: "integer", minimum: 1 },
+          },
+        },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
         textChunkLimit: { type: "integer", minimum: 1 },

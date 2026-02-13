@@ -80,3 +80,11 @@ export type DynamicAgentCreationConfig = {
   agentDirTemplate?: string;
   maxAgents?: number;
 };
+
+export type GroupUserWorkspaceConfig = {
+  enabled?: boolean;
+  mode?: "per-user" | "per-session";
+  workspaceTemplate?: string;
+  agentDirTemplate?: string;
+  maxAgents?: number;
+};

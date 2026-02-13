@@ -15,10 +15,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
-import {
-  maybeHandleModelDirectiveInfo,
-  resolveModelSelectionFromDirective,
-} from "./directive-handling.model.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   formatDirectiveAck,
@@ -121,43 +117,22 @@ export async function handleDirectiveOnly(params: {
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
 
-  const modelInfo = await maybeHandleModelDirectiveInfo({
-    directives,
-    cfg: params.cfg,
-    agentDir,
-    activeAgentId,
-    provider,
-    model,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelCatalog,
-    resetModelOverride,
-    surface: params.surface,
-  });
+  const modelInfo = null;
   if (modelInfo) {
     return modelInfo;
   }
 
-  const modelResolution = resolveModelSelectionFromDirective({
-    directives,
-    cfg: params.cfg,
-    agentDir,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys,
-    allowedModelCatalog,
-    provider,
-  });
-  if (modelResolution.errorText) {
-    return { text: modelResolution.errorText };
+  const modelSelection:
+    | { provider?: string; model?: string; alias?: string; isDefault?: boolean }
+    | undefined = undefined;
+  const profileOverride: string | undefined = undefined;
+  const errorText: string | undefined = undefined;
+  if (errorText) {
+    return { text: errorText };
   }
-  const modelSelection = modelResolution.modelSelection;
-  const profileOverride = modelResolution.profileOverride;
 
-  const resolvedProvider = modelSelection?.provider ?? provider;
-  const resolvedModel = modelSelection?.model ?? model;
+  const resolvedProvider = provider;
+  const resolvedModel = model;
 
   if (directives.hasThinkDirective && !directives.thinkLevel) {
     // If no argument was provided, show the current level
@@ -348,13 +323,6 @@ export async function handleDirectiveOnly(params: {
       sessionEntry.execNode = directives.execNode;
     }
   }
-  if (modelSelection) {
-    applyModelOverrideToSessionEntry({
-      entry: sessionEntry,
-      selection: modelSelection,
-      profileOverride,
-    });
-  }
   if (directives.hasQueueDirective && directives.queueReset) {
     delete sessionEntry.queueMode;
     delete sessionEntry.queueDebounceMs;
@@ -380,15 +348,6 @@ export async function handleDirectiveOnly(params: {
     await updateSessionStore(storePath, (store) => {
       store[sessionKey] = sessionEntry;
     });
-  }
-  if (modelSelection) {
-    const nextLabel = `${modelSelection.provider}/${modelSelection.model}`;
-    if (nextLabel !== initialModelLabel) {
-      enqueueSystemEvent(formatModelSwitchEvent(nextLabel, modelSelection.alias), {
-        sessionKey,
-        contextKey: `model:${nextLabel}`,
-      });
-    }
   }
   if (elevatedChanged) {
     const nextElevated = (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
@@ -465,18 +424,6 @@ export async function handleDirectiveOnly(params: {
     parts.push(
       `Thinking level set to high (xhigh not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
-  }
-  if (modelSelection) {
-    const label = `${modelSelection.provider}/${modelSelection.model}`;
-    const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
-    parts.push(
-      modelSelection.isDefault
-        ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias}.`,
-    );
-    if (profileOverride) {
-      parts.push(`Auth profile set to ${profileOverride}.`);
-    }
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));

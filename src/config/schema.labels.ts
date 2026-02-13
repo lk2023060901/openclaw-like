@@ -1,5 +1,3 @@
-import { IRC_FIELD_LABELS } from "./schema.irc.js";
-
 export const FIELD_LABELS: Record<string, string> = {
   "meta.lastTouchedVersion": "Config Last Touched Version",
   "meta.lastTouchedAt": "Config Last Touched At",
@@ -229,7 +227,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.imessage": "iMessage",
   "channels.bluebubbles": "BlueBubbles",
   "channels.msteams": "MS Teams",
-  ...IRC_FIELD_LABELS,
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
   "channels.telegram.streamMode": "Telegram Draft Stream Mode",

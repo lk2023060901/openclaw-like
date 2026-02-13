@@ -32,9 +32,20 @@ import {
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
-import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/!\[.*?\]\(.*?\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_~`]+/g, "")
+    .replace(/^#+\s*/gm, "")
+    .replace(/^\s*[-*+]\s*/gm, "")
+    .replace(/^\s*\d+\.\s*/gm, "")
+    .replace(/`{1,3}[^`]*`{1,3}/g, "")
+    .trim();
+}
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;

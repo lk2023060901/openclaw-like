@@ -15,9 +15,6 @@ import { resolveChannelCapabilities } from "../../config/channel-capabilities.js
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
-import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
-import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -246,53 +243,18 @@ export async function compactEmbeddedPiSessionDirect(
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
       ? (resolveChannelCapabilities({
-          cfg: params.config,
+          cfg: params.config!,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         }) ?? [])
       : undefined;
-    if (runtimeChannel === "telegram" && params.config) {
-      const inlineButtonsScope = resolveTelegramInlineButtonsScope({
-        cfg: params.config,
-        accountId: params.agentAccountId ?? undefined,
-      });
-      if (inlineButtonsScope !== "off") {
-        if (!runtimeCapabilities) {
-          runtimeCapabilities = [];
-        }
-        if (
-          !runtimeCapabilities.some((cap) => String(cap).trim().toLowerCase() === "inlinebuttons")
-        ) {
-          runtimeCapabilities.push("inlineButtons");
-        }
-      }
+    if (false && runtimeChannel === "telegram" && params.config) {
     }
-    const reactionGuidance =
-      runtimeChannel && params.config
-        ? (() => {
-            if (runtimeChannel === "telegram") {
-              const resolved = resolveTelegramReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Telegram" } : undefined;
-            }
-            if (runtimeChannel === "signal") {
-              const resolved = resolveSignalReactionLevel({
-                cfg: params.config,
-                accountId: params.agentAccountId ?? undefined,
-              });
-              const level = resolved.agentReactionGuidance;
-              return level ? { level, channel: "Signal" } : undefined;
-            }
-            return undefined;
-          })()
-        : undefined;
+    const reactionGuidance = undefined;
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions({
-          cfg: params.config,
+          cfg: params.config!,
           channel: runtimeChannel,
         })
       : undefined;

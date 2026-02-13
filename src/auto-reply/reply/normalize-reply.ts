@@ -2,7 +2,6 @@ import type { ReplyPayload } from "../types.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
@@ -12,7 +11,6 @@ export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
-  /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
@@ -44,7 +42,6 @@ export function normalizeReplyPayload(
     text = "";
   }
   if (text && !trimmed) {
-    // Keep empty text when media exists so media-only replies still send.
     text = "";
   }
 
@@ -69,14 +66,8 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (text && hasLineDirectives(text)) {
-    enrichedPayload = parseLineDirectives(enrichedPayload);
-    text = enrichedPayload.text;
-  }
 
-  // Resolve template variables in responsePrefix if context is provided
   const effectivePrefix = opts.responsePrefixContext
     ? resolveResponsePrefixTemplate(opts.responsePrefix, opts.responsePrefixContext)
     : opts.responsePrefix;

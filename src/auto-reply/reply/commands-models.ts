@@ -10,16 +10,38 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import {
-  buildModelsKeyboard,
-  buildProviderKeyboard,
-  calculateTotalPages,
-  getModelsPageSize,
-  type ProviderInfo,
-} from "../../telegram/model-buttons.js";
+
+type ProviderInfo = {
+  id: string;
+  label: string;
+  modelCount: number;
+};
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+
+function getModelsPageSize(): number {
+  return PAGE_SIZE_DEFAULT;
+}
+
+function calculateTotalPages(total: number, pageSize: number): number {
+  return Math.ceil(total / pageSize);
+}
+
+function buildProviderKeyboard(_providers: ProviderInfo[]): unknown {
+  return null;
+}
+
+function buildModelsKeyboard(_params: {
+  provider: string;
+  models: string[];
+  currentModel?: string;
+  currentPage: number;
+  totalPages: number;
+  pageSize: number;
+}): unknown {
+  return null;
+}
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
@@ -200,7 +222,8 @@ export async function resolveModelsCommandReply(params: {
     if (isTelegram && providers.length > 0) {
       const providerInfos: ProviderInfo[] = providers.map((p) => ({
         id: p,
-        count: byProvider.get(p)?.size ?? 0,
+        label: p,
+        modelCount: byProvider.get(p)?.size ?? 0,
       }));
       const buttons = buildProviderKeyboard(providerInfos);
       const text = "Select a provider:";

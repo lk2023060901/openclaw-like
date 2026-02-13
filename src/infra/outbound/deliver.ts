@@ -1,11 +1,6 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { sendMessageDiscord } from "../../discord/send.js";
-import type { sendMessageIMessage } from "../../imessage/send.js";
-import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
-import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import type { OutboundChannel } from "./targets.js";
 import {
@@ -22,34 +17,13 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
-import { sendMessageSignal } from "../../signal/send.js";
 import { throwIfAborted } from "./abort.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
 
-type SendMatrixMessage = (
-  to: string,
-  text: string,
-  opts?: { mediaUrl?: string; replyToId?: string; threadId?: string; timeoutMs?: number },
-) => Promise<{ messageId: string; roomId: string }>;
-
-export type OutboundSendDeps = {
-  sendWhatsApp?: typeof sendMessageWhatsApp;
-  sendTelegram?: typeof sendMessageTelegram;
-  sendDiscord?: typeof sendMessageDiscord;
-  sendSlack?: typeof sendMessageSlack;
-  sendSignal?: typeof sendMessageSignal;
-  sendIMessage?: typeof sendMessageIMessage;
-  sendMatrix?: SendMatrixMessage;
-  sendMSTeams?: (
-    to: string,
-    text: string,
-    opts?: { mediaUrl?: string },
-  ) => Promise<{ messageId: string; conversationId: string }>;
-};
+export type OutboundSendDeps = Record<string, unknown>;
 
 export type OutboundDeliveryResult = {
   channel: Exclude<OutboundChannel, "none">;
@@ -61,7 +35,6 @@ export type OutboundDeliveryResult = {
   timestamp?: number;
   toJid?: string;
   pollId?: string;
-  // Channel docking: stash channel-specific fields here to avoid core type churn.
   meta?: Record<string, unknown>;
 };
 
@@ -76,7 +49,6 @@ type ChannelHandler = {
   sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
 };
 
-// Channel docking: outbound delivery delegates to plugin.outbound adapters.
 async function createChannelHandler(params: {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
@@ -197,7 +169,6 @@ export async function deliverOutboundPayloads(params: {
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -215,19 +186,6 @@ export async function deliverOutboundPayloads(params: {
       })
     : undefined;
   const chunkMode = handler.chunker ? resolveChunkMode(cfg, channel, accountId) : "length";
-  const isSignalChannel = channel === "signal";
-  const signalTableMode = isSignalChannel
-    ? resolveMarkdownTableMode({ cfg, channel: "signal", accountId })
-    : "code";
-  const signalMaxBytes = isSignalChannel
-    ? resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
-        accountId,
-      })
-    : undefined;
 
   const sendTextChunks = async (text: string) => {
     throwIfAborted(abortSignal);
@@ -264,80 +222,7 @@ export async function deliverOutboundPayloads(params: {
     }
   };
 
-  const sendSignalText = async (text: string, styles: SignalTextStyleRange[]) => {
-    throwIfAborted(abortSignal);
-    return {
-      channel: "signal" as const,
-      ...(await sendSignal(to, text, {
-        maxBytes: signalMaxBytes,
-        accountId: accountId ?? undefined,
-        textMode: "plain",
-        textStyles: styles,
-      })),
-    };
-  };
-
-  const sendSignalTextChunks = async (text: string) => {
-    throwIfAborted(abortSignal);
-    let signalChunks =
-      textLimit === undefined
-        ? markdownToSignalTextChunks(text, Number.POSITIVE_INFINITY, {
-            tableMode: signalTableMode,
-          })
-        : markdownToSignalTextChunks(text, textLimit, { tableMode: signalTableMode });
-    if (signalChunks.length === 0 && text) {
-      signalChunks = [{ text, styles: [] }];
-    }
-    for (const chunk of signalChunks) {
-      throwIfAborted(abortSignal);
-      results.push(await sendSignalText(chunk.text, chunk.styles));
-    }
-  };
-
-  const sendSignalMedia = async (caption: string, mediaUrl: string) => {
-    throwIfAborted(abortSignal);
-    const formatted = markdownToSignalTextChunks(caption, Number.POSITIVE_INFINITY, {
-      tableMode: signalTableMode,
-    })[0] ?? {
-      text: caption,
-      styles: [],
-    };
-    return {
-      channel: "signal" as const,
-      ...(await sendSignal(to, formatted.text, {
-        mediaUrl,
-        maxBytes: signalMaxBytes,
-        accountId: accountId ?? undefined,
-        textMode: "plain",
-        textStyles: formatted.styles,
-      })),
-    };
-  };
-  const normalizeWhatsAppPayload = (payload: ReplyPayload): ReplyPayload | null => {
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    const rawText = typeof payload.text === "string" ? payload.text : "";
-    const normalizedText = rawText.replace(/^(?:[ \t]*\r?\n)+/, "");
-    if (!normalizedText.trim()) {
-      if (!hasMedia) {
-        return null;
-      }
-      return {
-        ...payload,
-        text: "",
-      };
-    }
-    return {
-      ...payload,
-      text: normalizedText,
-    };
-  };
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads).flatMap((payload) => {
-    if (channel !== "whatsapp") {
-      return [payload];
-    }
-    const normalized = normalizeWhatsAppPayload(payload);
-    return normalized ? [normalized] : [];
-  });
+  const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
   const hookRunner = getGlobalHookRunner();
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
@@ -367,7 +252,6 @@ export async function deliverOutboundPayloads(params: {
     try {
       throwIfAborted(abortSignal);
 
-      // Run message_sending plugin hook (may modify content or cancel)
       let effectivePayload = payload;
       if (hookRunner?.hasHooks("message_sending")) {
         try {
@@ -401,11 +285,7 @@ export async function deliverOutboundPayloads(params: {
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
-        if (isSignalChannel) {
-          await sendSignalTextChunks(payloadSummary.text);
-        } else {
-          await sendTextChunks(payloadSummary.text);
-        }
+        await sendTextChunks(payloadSummary.text);
         emitMessageSent(true);
         continue;
       }
@@ -415,11 +295,7 @@ export async function deliverOutboundPayloads(params: {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
         first = false;
-        if (isSignalChannel) {
-          results.push(await sendSignalMedia(caption, url));
-        } else {
-          results.push(await handler.sendMedia(caption, url));
-        }
+        results.push(await handler.sendMedia(caption, url));
       }
       emitMessageSent(true);
     } catch (err) {
